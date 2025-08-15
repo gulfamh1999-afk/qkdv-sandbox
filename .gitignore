@@ -1,0 +1,5 @@
+compiled_core/
+__pycache__/
+*.pyc
+.env
+.streamlit/

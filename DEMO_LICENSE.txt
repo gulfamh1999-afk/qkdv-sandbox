@@ -1,0 +1,5 @@
+DEMO LICENSE — READ-ONLY / NO REVERSE ENGINEERING
+Copyright (c) 2025 Gfam
+
+Demo only; no reverse engineering, decompilation, or extraction of algorithms.
+No commercial use without license. Exports are watermarked and tamper-evident.
