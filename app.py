@@ -45,31 +45,31 @@ st.subheader("1) Preview demo dataset")
 st.dataframe(df.head(), use_container_width=True)
 
 # ---------------- θ-embedding (redacted) ----------------
+# --- Step 2: θ-embedding (redacted demo) ---
 st.subheader("2) θ-embedding (redacted demo)")
 st.caption("This uses a stub embedding for demo purposes. The production transform lives in a compiled core.")
 
-# try to get numeric features; if none, attempt coercion
+# Numeric features only (coerce if needed)
 num_df = df.select_dtypes(include=[np.number])
 if num_df.shape[1] == 0:
-    coerced = df.apply(pd.to_numeric, errors="coerce")
-    num_df = coerced.select_dtypes(include=[np.number])
-
+    num_df = df.apply(pd.to_numeric, errors="coerce").select_dtypes(include=[np.number])
 if num_df.shape[1] == 0:
     st.error("No numeric columns found to embed. Add a couple of numeric columns to the demo CSV.")
     st.stop()
 
 features = num_df.to_numpy(dtype=float)
-# PCA components capped by available features
+
+# PCA -> do NOT name the array 'pca'
 n_components = min(3, features.shape[1])
 pca_model = PCA(n_components=n_components)
 pca_feats = pca_model.fit_transform(features).astype(float)
 
-# Normalize safely and map to angles
+# Safe normalize and map to angles
 eps = 1e-9
 mins   = np.min(pca_feats, axis=0)
-ranges = np.ptp(pca_feats, axis=0)  # <- robust vs ndarray attribute issues
-safe_ranges = np.where(ranges < eps, 1.0, ranges)  # avoid divide-by-zero on constant cols
-normed  = (pca_feats - mins) / (safe_ranges + eps)
+ranges = np.ptp(pca_feats, axis=0)           # use numpy.ptp, not array.ptp attribute
+ranges[ranges < eps] = 1.0                   # avoid divide-by-zero on constant cols
+normed  = (pca_feats - mins) / (ranges + eps)
 bounded = 2.0 * normed - 1.0
 theta   = np.arcsin(np.clip(bounded, -1.0, 1.0))
 
