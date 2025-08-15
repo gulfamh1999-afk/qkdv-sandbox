@@ -1,31 +1,30 @@
-import os, io, hashlib, datetime as dt
-import numpy as np, pandas as pd, streamlit as st
+import os, hashlib, datetime as dt
+import numpy as np
+import pandas as pd
+import streamlit as st
 from sklearn.decomposition import PCA
 
+# ---------------- UI & page ----------------
 st.set_page_config(page_title="Quantum Kernel DevKit — Sandbox (Redacted)", layout="wide")
 st.title("🧬 Quantum Kernel DevKit — Sandbox (Redacted)")
 
-# --- Config via environment / secrets ---
-EXPIRES = os.getenv("SANDBOX_EXPIRES_AT", "")
-PASSWORD = os.getenv("SANDBOX_PASSWORD") or st.secrets.get("SANDBOX_PASSWORD", None)
-WATERMARK = os.getenv("DEMO_WATERMARK") or st.secrets.get(
-    "DEMO_WATERMARK", "© Gfam Quantum Kernel DevKit — Demo"
-)
+# ---------------- Secrets / env ----------------
+EXPIRES   = os.getenv("SANDBOX_EXPIRES_AT", "")
+PASSWORD  = os.getenv("SANDBOX_PASSWORD") or st.secrets.get("SANDBOX_PASSWORD", None)
+WATERMARK = os.getenv("DEMO_WATERMARK") or st.secrets.get("DEMO_WATERMARK", "© Gfam Quantum Kernel DevKit — Demo")
 
-# --- Expiry check ---
-def expired(expires_str):
+def expired(expires_str: str) -> bool:
     if not expires_str:
         return False
     try:
-        return dt.datetime.utcnow() > dt.datetime.fromisoformat(expires_str.replace("Z", ""))
+        return dt.datetime.utcnow() > dt.datetime.fromisoformat(expires_str.replace("Z",""))
     except Exception:
         return False
 
 if EXPIRES and expired(EXPIRES):
-    st.error("🔒 This sandbox has expired. Please contact the maintainer for a refreshed link.")
+    st.error("🔒 This sandbox has expired. Ask the maintainer for a refreshed link.")
     st.stop()
 
-# --- Password gate ---
 if PASSWORD:
     if st.text_input("Enter access password", type="password") != PASSWORD:
         st.warning("Access password required.")
@@ -33,77 +32,100 @@ if PASSWORD:
 
 st.info("Demo runs on public, de-identified data. Internals are redacted; compiled core not included.")
 
-# --- Load public demo data ---
-DEMO_PATH = "public_demo.csv"   # Updated to match current repo structure
-if not os.path.exists(DEMO_PATH):
-    st.error(f"⚠️ Demo dataset missing at '{DEMO_PATH}'. Please ensure it exists in the repo root.")
+# ---------------- Load data (robust path) ----------------
+CANDIDATES = ["public_demo.csv", os.path.join("data", "public_demo.csv")]
+DEMO_PATH = next((p for p in CANDIDATES if os.path.exists(p)), None)
+if not DEMO_PATH:
+    st.error("⚠️ Demo dataset missing. Put it in repo root as `public_demo.csv` or inside `data/public_demo.csv`.")
     st.stop()
 
 df = pd.read_csv(DEMO_PATH)
 
-# --- Step 1: Preview dataset ---
 st.subheader("1) Preview demo dataset")
-st.dataframe(df.head())
+st.dataframe(df.head(), use_container_width=True)
 
-# --- Step 2: θ-embedding (redacted) ---
+# ---------------- θ-embedding (redacted) ----------------
 st.subheader("2) θ-embedding (redacted demo)")
 st.caption("This uses a stub embedding for demo purposes. The production transform lives in a compiled core.")
-n_components = 3 if df.shape[1] < 6 else 3
-features = df.select_dtypes(include=[float, int]).values
-pca = PCA(n_components=min(n_components, features.shape[1])).fit_transform(features)
+
+# try to get numeric features; if none, attempt coercion
+num_df = df.select_dtypes(include=[np.number])
+if num_df.shape[1] == 0:
+    coerced = df.apply(pd.to_numeric, errors="coerce")
+    num_df = coerced.select_dtypes(include=[np.number])
+
+if num_df.shape[1] == 0:
+    st.error("No numeric columns found to embed. Add a couple of numeric columns to the demo CSV.")
+    st.stop()
+
+features = num_df.to_numpy(dtype=float)
+# PCA components capped by available features
+n_components = min(3, features.shape[1])
+pca_model = PCA(n_components=n_components)
+pca_feats = pca_model.fit_transform(features).astype(float)
+
+# Normalize safely and map to angles
 eps = 1e-9
-normed = (pca - pca.min(axis=0)) / (pca.ptp(axis=0) + eps)
-bounded = 2 * normed - 1
-theta = np.arcsin(np.clip(bounded, -1, 1))
+mins   = np.min(pca_feats, axis=0)
+ranges = np.ptp(pca_feats, axis=0)  # <- robust vs ndarray attribute issues
+safe_ranges = np.where(ranges < eps, 1.0, ranges)  # avoid divide-by-zero on constant cols
+normed  = (pca_feats - mins) / (safe_ranges + eps)
+bounded = 2.0 * normed - 1.0
+theta   = np.arcsin(np.clip(bounded, -1.0, 1.0))
+
 st.write("θ shape:", theta.shape)
 
-# --- Step 3: Run loop (SPSA-like demo) ---
+# ---------------- Run loop (SPSA-like demo) ----------------
 st.subheader("3) Run loop (SPSA-like demo)")
 np.random.seed(7)
-def obj(th):
+
+def obj(th: np.ndarray) -> float:
+    # Smooth multimodal objective to mimic an expectation landscape
     return float(np.mean(np.cos(th) + 0.2 * np.sin(3 * th)))
 
 iters = 60
 alpha, gamma = 0.1, 0.101
 x = theta.mean(axis=0)
 hist = []
+
 for k in range(1, iters + 1):
     ck = 1.0 / (k ** gamma)
     delta = np.random.choice([-1, 1], size=x.shape)
-    f_plus = obj(x + ck * delta)
+    f_plus  = obj(x + ck * delta)
     f_minus = obj(x - ck * delta)
     gk = (f_plus - f_minus) / (2 * ck * delta + 1e-9)
     ak = alpha / (k ** 0.602)
     x = x - ak * gk
     hist.append(f_plus)
 
-st.line_chart(hist)
+st.line_chart(pd.DataFrame({"expectation_like": hist}), use_container_width=True)
 
-# --- Step 4: Shortlist ---
+# ---------------- Shortlist ----------------
 st.subheader("4) Shortlist")
-scores = (theta @ x)
+scores = theta @ x
 shortlist = (
     pd.DataFrame({"id": df.index, "score": scores})
     .sort_values("score")
     .head(25)
+    .reset_index(drop=True)
 )
-st.dataframe(shortlist)
+st.dataframe(shortlist, use_container_width=True)
 
-# --- Step 5: Export (watermarked) ---
+# ---------------- Export (watermarked) ----------------
 st.subheader("5) Export (watermarked)")
 def tamper_hash(d: pd.DataFrame) -> str:
-    b = d.to_csv(index=False).encode()
-    return hashlib.sha256(b).hexdigest()
+    raw = d.to_csv(index=False).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 export_df = shortlist.copy()
-export_df["watermark"] = WATERMARK
+export_df["watermark"]   = WATERMARK
 export_df["tamper_hash"] = tamper_hash(export_df)
 
 st.download_button(
     "⬇️ Download shortlist (CSV, watermarked)",
     data=export_df.to_csv(index=False).encode(),
     file_name="shortlist_demo.csv",
-    mime="text/csv"
+    mime="text/csv",
 )
 
 st.caption("© Gfam Quantum Kernel DevKit — Demo • No reverse engineering • Auto-delete policy applies.")
